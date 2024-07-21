@@ -2,6 +2,51 @@
 
 # pragma mark - YouTube patches
 
+
+// Workaround for MiRO92/uYou-for-YouTube#12, qnblackcat/uYouPlus#263
+%hook YTDataUtils
++ (NSMutableDictionary *)spamSignalsDictionary {
+    return nil;
+}
++ (NSMutableDictionary *)spamSignalsDictionaryWithoutIDFA {
+    return nil;
+}
+%end
+
+%hook YTHotConfig
+- (BOOL)disableAfmaIdfaCollection { return NO; }
+%end
+
+// Reposition "Create" Tab to the Center in the Pivot Bar - qnblackcat/uYouPlus#107
+/*
+static void repositionCreateTab(YTIGuideResponse *response) {
+    NSMutableArray<YTIGuideResponseSupportedRenderers *> *renderers = [response itemsArray];
+    for (YTIGuideResponseSupportedRenderers *guideRenderers in renderers) {
+        YTIPivotBarRenderer *pivotBarRenderer = [guideRenderers pivotBarRenderer];
+        NSMutableArray<YTIPivotBarSupportedRenderers *> *items = [pivotBarRenderer itemsArray];
+        NSUInteger createIndex = [items indexOfObjectPassingTest:^BOOL(YTIPivotBarSupportedRenderers *renderers, NSUInteger idx, BOOL *stop) {
+            return [[[renderers pivotBarItemRenderer] pivotIdentifier] isEqualToString:@"FEuploads"];
+        }];
+        if (createIndex != NSNotFound) {
+            YTIPivotBarSupportedRenderers *createTab = [items objectAtIndex:createIndex];
+            [items removeObjectAtIndex:createIndex];
+            NSUInteger centerIndex = items.count / 2;
+            [items insertObject:createTab atIndex:centerIndex]; // Reposition the "Create" tab at the center
+        }
+    }
+}
+%hook YTGuideServiceCoordinator
+- (void)handleResponse:(YTIGuideResponse *)response withCompletion:(id)completion {
+    repositionCreateTab(response);
+    %orig(response, completion);
+}
+- (void)handleResponse:(YTIGuideResponse *)response error:(id)error completion:(id)completion {
+    repositionCreateTab(response);
+    %orig(response, error, completion);
+}
+%end
+*/
+
 // https://github.com/PoomSmart/YouTube-X/blob/1e62b68e9027fcb849a75f54a402a530385f2a51/Tweak.x#L27
 // %hook YTAdsInnerTubeContextDecorator
 // - (void)decorateContext:(id)context {}
@@ -36,6 +81,110 @@
     else { return %orig; }
 }
 %end
+
+// YouTube Native Share - https://github.com/jkhsjdhjs/youtube-native-share - @jkhsjdhjs
+typedef NS_ENUM(NSInteger, ShareEntityType) {
+    ShareEntityFieldVideo = 1,
+    ShareEntityFieldPlaylist = 2,
+    ShareEntityFieldChannel = 3,
+    ShareEntityFieldClip = 8
+};
+
+static inline NSString* extractIdWithFormat(GPBUnknownFieldSet *fields, NSInteger fieldNumber, NSString *format) {
+    if (![fields hasField:fieldNumber])
+        return nil;
+    GPBUnknownField *idField = [fields getField:fieldNumber];
+    if ([idField.lengthDelimitedList count] != 1)
+        return nil;
+    NSString *id = [[NSString alloc] initWithData:[idField.lengthDelimitedList firstObject] encoding:NSUTF8StringEncoding];
+    return [NSString stringWithFormat:format, id];
+}
+static BOOL showNativeShareSheet(NSString *serializedShareEntity) {
+    GPBMessage *shareEntity = [%c(GPBMessage) deserializeFromString:serializedShareEntity];
+    GPBUnknownFieldSet *fields = shareEntity.unknownFields;
+    NSString *shareUrl;
+
+    if ([fields hasField:ShareEntityFieldClip]) {
+        GPBUnknownField *shareEntityClip = [fields getField:ShareEntityFieldClip];
+        if ([shareEntityClip.lengthDelimitedList count] != 1)
+            return NO;
+        GPBMessage *clipMessage = [%c(GPBMessage) parseFromData:[shareEntityClip.lengthDelimitedList firstObject] error:nil];
+        shareUrl = extractIdWithFormat(clipMessage.unknownFields, 1, @"https://youtube.com/clip/%@");
+    }
+
+    if (!shareUrl)
+        shareUrl = extractIdWithFormat(fields, ShareEntityFieldChannel, @"https://youtube.com/channel/%@");
+
+    if (!shareUrl) {
+        shareUrl = extractIdWithFormat(fields, ShareEntityFieldPlaylist, @"%@");
+        if (shareUrl) {
+            if (![shareUrl hasPrefix:@"PL"] && ![shareUrl hasPrefix:@"FL"])
+                shareUrl = [shareUrl stringByAppendingString:@"&playnext=1"];
+            shareUrl = [@"https://youtube.com/playlist?list=" stringByAppendingString:shareUrl];
+        }
+    }
+
+    if (!shareUrl)
+        shareUrl = extractIdWithFormat(fields, ShareEntityFieldVideo, @"https://youtube.com/watch?v=%@");
+
+    if (!shareUrl)
+        return NO;
+
+    UIActivityViewController *activityViewController = [[UIActivityViewController alloc] initWithActivityItems:@[shareUrl] applicationActivities:nil];
+    activityViewController.excludedActivityTypes = @[UIActivityTypeAssignToContact, UIActivityTypePrint];
+
+    UIViewController *topViewController = [%c(YTUIUtils) topViewControllerForPresenting];
+
+    if (activityViewController.popoverPresentationController) {
+        activityViewController.popoverPresentationController.sourceView = topViewController.view;
+
+        CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
+        CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+
+        activityViewController.popoverPresentationController.sourceRect = CGRectMake(screenWidth / 2.0, screenHeight, 0, 0);
+        activityViewController.popoverPresentationController.permittedArrowDirections = UIPopoverArrowDirectionAny;
+    }
+    [topViewController presentViewController:activityViewController animated:YES completion:nil];
+    return YES;
+}
+
+/* -------------------- iPad Layout -------------------- */
+
+%hook YTAccountScopedCommandResponderEvent
+- (void)send {
+    GPBExtensionDescriptor *shareEntityEndpointDescriptor = [%c(YTIShareEntityEndpoint) shareEntityEndpoint];
+    if (![self.command hasExtension:shareEntityEndpointDescriptor])
+        return %orig;
+    YTIShareEntityEndpoint *shareEntityEndpoint = [self.command getExtension:shareEntityEndpointDescriptor];
+    if (!shareEntityEndpoint.hasSerializedShareEntity)
+        return %orig;
+    if (!showNativeShareSheet(shareEntityEndpoint.serializedShareEntity))
+        return %orig;
+}
+%end
+
+/* ------------------- iPhone Layout ------------------- */
+
+%hook ELMPBShowActionSheetCommand
+- (void)executeWithCommandContext:(id)_context handler:(id)_handler {
+    if (!self.hasOnAppear)
+        return %orig;
+    GPBExtensionDescriptor *innertubeCommandDescriptor = [%c(YTIInnertubeCommandExtensionRoot) innertubeCommand];
+    if (![self.onAppear hasExtension:innertubeCommandDescriptor])
+        return %orig;
+    YTICommand *innertubeCommand = [self.onAppear getExtension:innertubeCommandDescriptor];
+    GPBExtensionDescriptor *updateShareSheetCommandDescriptor = [%c(YTIUpdateShareSheetCommand) updateShareSheetCommand];
+    if(![innertubeCommand hasExtension:updateShareSheetCommandDescriptor])
+        return %orig;
+    YTIUpdateShareSheetCommand *updateShareSheetCommand = [innertubeCommand getExtension:updateShareSheetCommandDescriptor];
+    if (!updateShareSheetCommand.hasSerializedShareEntity)
+        return %orig;
+    if (!showNativeShareSheet(updateShareSheetCommand.serializedShareEntity))
+        return %orig;
+}
+%end
+
+//
 
 // iOS 16 uYou crash fix - @level3tjg: https://github.com/qnblackcat/uYouPlus/pull/224
 // %group iOS16
@@ -191,7 +340,4 @@ static void refreshUYouAppearance() {
 
     // Disable uYou's playback speed controls (prevent crash on video playback https://github.com/therealFoxster/uYouPlus/issues/2#issuecomment-1894912963)
     // [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"showPlaybackRate"];
-    
-    // Disable uYou's adblock
-    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"removeYouTubeAds"];
 }
