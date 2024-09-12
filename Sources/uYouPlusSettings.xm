@@ -427,7 +427,7 @@ extern NSBundle *uYouPlusBundle();
         LOC(@"ENABLE_PORTRAIT_FULLSCREEN_DESC"), 
         @"portraitFullscreen_enabled",
         ({
-            if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPhone) {
+            if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
                 [[NSUserDefaults standardUserDefaults] setBool:enable forKey:@"portraitFullscreen_enabled"];
                 SHOW_RELAUNCH_YT_SNACKBAR;
                 return YES;
@@ -445,7 +445,7 @@ extern NSBundle *uYouPlusBundle();
         LOC(@"FULLSCREEN_TO_THE_RIGHT_DESC"), 
         @"fullscreenToTheRight_enabled",
         ({
-            if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPhone) {
+            if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
                 [[NSUserDefaults standardUserDefaults] setBool:enable forKey:@"fullscreenToTheRight_enabled"];
                 SHOW_RELAUNCH_YT_SNACKBAR;
                 return YES;
@@ -494,7 +494,7 @@ extern NSBundle *uYouPlusBundle();
         LOC(@"HIDE_FULLSCREEN_ACTION_BUTTONS_DESC"), 
         @"hideFullscreenActions_enabled",
         ({
-            if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+            if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
                 // Show alert if the option is not compatible with iPad
                 UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"iPad Compatibility Issue" message:@"This option is only compatible with iPhone devices." preferredStyle:UIAlertControllerStyleAlert];
                 UIAlertAction *okAction = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil];
@@ -609,6 +609,12 @@ extern NSBundle *uYouPlusBundle();
                     [alert addAction:okAction];
                     [settingsViewController presentViewController:alert animated:YES completion:nil];
                     return NO;
+            } else if (UIScreen.mainScreen.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark) {
+                UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Light Mode Detected" message:@"LowContrastMode is only available in Dark Mode. Please switch to Dark Mode to be able to use LowContrastMode." preferredStyle:UIAlertControllerStyleAlert];
+                UIAlertAction *okAction = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil];
+                [alert addAction:okAction];
+                [settingsViewController presentViewController:alert animated:YES completion:nil];
+                return NO;
                 }
             }
             [[NSUserDefaults standardUserDefaults] setBool:enable forKey:@"lowContrastMode_enabled"];
